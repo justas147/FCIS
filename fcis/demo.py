@@ -29,10 +29,9 @@ print "use mxnet at", mx.__file__
 from core.tester import im_detect, Predictor
 from symbols import *
 from utils.load_model import load_param
-from utils.show_masks import show_masks
 from utils.tictoc import tic, toc
 from nms.nms import py_nms_wrapper
-from mask.mask_transform import gpu_mask_voting, cpu_mask_voting
+from mask.mask_transform import cpu_mask_voting
 
 
 def main():
@@ -75,19 +74,11 @@ def main():
     max_data_shape = [[('data', (1, 3, max([v[0] for v in config.SCALES]), max([v[1] for v in config.SCALES])))]]
     provide_data = [[(k, v.shape) for k, v in zip(data_names, data[i])] for i in xrange(len(data))]
     provide_label = [None for i in xrange(len(data))]
-    arg_params, aux_params = load_param(cur_path + '/../model/fcis_coco', 0, process=True)
+    arg_params, aux_params = load_param(cur_path + '/../model/fcis_coco', convert=True, 0, process=True)
     predictor = Predictor(sym, data_names, label_names,
-                          context=[mx.gpu(ctx_id[0])], max_data_shapes=max_data_shape,
+                          context=[mx.cpu()], max_data_shapes=max_data_shape,
                           provide_data=provide_data, provide_label=provide_label,
                           arg_params=arg_params, aux_params=aux_params)
-
-    # warm up
-    for i in xrange(2):
-        data_batch = mx.io.DataBatch(data=[data[0]], label=[], pad=0, index=0,
-                                     provide_data=[[(k, v.shape) for k, v in zip(data_names, data[0])]],
-                                     provide_label=[None])
-        scales = [data_batch.data[i][1].asnumpy()[0, 2] for i in xrange(len(data_batch.data))]
-        _, _, _, _ = im_detect(predictor, data_batch, data_names, scales, config)
 
     # test
     for idx, im_name in enumerate(image_names):
@@ -128,22 +119,27 @@ def main():
             im_width = np.round(im_shapes[0][1] / scales[0]).astype('int')
             print (im_height, im_width)
             boxes = clip_boxes(boxes[0], (im_height, im_width))
-            result_masks, result_dets = gpu_mask_voting(masks, boxes, scores[0], num_classes,
+            result_masks, result_dets = cpu_mask_voting(masks, boxes, scores[0], num_classes,
                                                         100, im_width, im_height,
                                                         config.TEST.NMS, config.TEST.MASK_MERGE_THRESH,
-                                                        config.BINARY_THRESH, ctx_id[0])
+                                                        config.BINARY_THRESH)
 
             dets = [result_dets[j] for j in range(1, num_classes)]
             masks = [result_masks[j][:, 0, :, :] for j in range(1, num_classes)]
+        
         print 'testing {} {:.4f}s'.format(im_name, toc())
+
         # visualize
         for i in xrange(len(dets)):
             keep = np.where(dets[i][:,-1]>0.7)
             dets[i] = dets[i][keep]
             masks[i] = masks[i][keep]
-        im = cv2.imread(cur_path + '/../demo/' + im_name)
-        im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
-        show_masks(im, dets, masks, classes, config)
+
+
+        for i in range(len(dets)):
+            if len(dets[i]) > 0:
+                for j in range(len(dets[i])):
+                    print('{name}: {score} ({loc})'.format(name = classes[i], score = dets[i][j][-1], loc = dets[i][j][:-1].tolist()))
 
     print 'done'
 
